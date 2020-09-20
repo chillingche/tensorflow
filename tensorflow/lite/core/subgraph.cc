@@ -1059,6 +1059,14 @@ TfLiteStatus Subgraph::Invoke() {
                            "failed to invoke");
     }
 
+    int node_input0_id = node.inputs->data[0];
+    const TfLiteTensor* node_input0 = tensor(node_input0_id);
+    // printT(node_input0);
+    int node_output0_id = node.outputs->data[0];
+    const TfLiteTensor* node_output0 = tensor(node_output0_id);
+    // printT(node_output0);
+    // std::cout << "|||||||||||||||||||||||||||||||||||||||||||||||" << std::endl;
+
     // Force execution prep for downstream ops if the latest op triggered the
     // resize of a dynamic tensor.
     if (tensor_resized_since_op_invoke_ &&

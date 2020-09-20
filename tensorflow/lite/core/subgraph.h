@@ -20,6 +20,7 @@ limitations under the License.
 #include <map>
 #include <utility>
 #include <vector>
+#include <iostream>
 
 #include "tensorflow/lite/allocation.h"
 #include "tensorflow/lite/c/common.h"
@@ -149,6 +150,65 @@ class Subgraph {
       return nullptr;
     }
     return &context_.tensors[tensor_index];
+  }
+
+  template <class T>
+  const T* get_tensor_data(int tensor_index) {
+    if (TfLiteTensor * tensor_ptr = tensor(tensor_index)) {
+      return reinterpret_cast<T*>(tensor_ptr->data.raw);
+    }
+    return nullptr;
+  }
+
+  const int getTensorSize(const TfLiteTensor* tensor) {
+    int size = 1;
+    for (int i = 0; i < tensor->dims->size; ++i) {
+      size *= tensor->dims->data[i];
+    }
+    return size;
+  }
+
+  void printTensorName(const TfLiteTensor* tensor) {
+    std::cout << tensor->name;
+  }
+
+  void printTensorDims(const TfLiteTensor* tensor) {
+    std::cout << "( ";
+    const TfLiteIntArray* dims = tensor->dims;
+    for (int i = 0; i < dims->size; ++i) {
+      std::cout << dims->data[i] << " ";
+    }
+    std::cout << ")";
+  }
+
+  template <class T>
+  void printTypedT(const TfLiteTensor* tensor) {
+    std::cout << std::endl;
+    printTensorName(tensor); std::cout << ": ";
+    printTensorDims(tensor); std::cout << std::endl;
+    // printTensorData
+    const int tensor_size = getTensorSize(tensor);
+    float tensor_sum = 0;
+    const T* tensor_data = reinterpret_cast<T*>(tensor->data.raw);
+    for (int i = 0; i < tensor_size; ++i) {
+      tensor_sum += (float)tensor_data[i];
+      if (i < 100) std::cout << (float)tensor_data[i] << " ";
+    }
+    std::cout << std::endl;
+    std::cout << "...sum: " << tensor_sum << std::endl;
+  }
+
+  void printT(const TfLiteTensor* tensor) {
+    switch (tensor->type) {
+      case kTfLiteUInt8:
+        printTypedT<uint8_t>(tensor);
+        break;
+      case kTfLiteInt32:
+        printTypedT<int>(tensor);
+        break;
+      default:
+        break;
+    }
   }
 
   // Read only access to list of inputs.

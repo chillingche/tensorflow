@@ -55,6 +55,56 @@ limitations under the License.
 namespace tflite {
 namespace label_image {
 
+const int getTensorSize(const TfLiteTensor* tensor) {
+  int size = 1;
+  for (int i = 0; i < tensor->dims->size; ++i) {
+    size *= tensor->dims->data[i];
+  }
+  return size;
+}
+
+void printTensorName(const TfLiteTensor* tensor) {
+  std::cout << tensor->name;
+}
+
+void printTensorDims(const TfLiteTensor* tensor) {
+  std::cout << "( ";
+  const TfLiteIntArray* dims = tensor->dims;
+  for (int i = 0; i < dims->size; ++i) {
+    std::cout << dims->data[i] << " ";
+  }
+  std::cout << ")";
+}
+
+template <class T>
+void printTypedT(const TfLiteTensor* tensor) {
+  std::cout << std::endl;
+  printTensorName(tensor); std::cout << ": ";
+  printTensorDims(tensor); std::cout << std::endl;
+  // printTensorData
+  const int tensor_size = getTensorSize(tensor);
+  float tensor_sum = 0;
+  const T* tensor_data = reinterpret_cast<T*>(tensor->data.raw);
+  for (int i = 0; i < tensor_size; ++i) {
+    tensor_sum += (float)tensor_data[i];
+    if (i < 100) std::cout << (float)tensor_data[i] << " ";
+  }
+  std::cout << std::endl;
+  std::cout << "...sum: " << tensor_sum << std::endl;
+}
+
+void printT(const TfLiteTensor* tensor) {
+  switch (tensor->type) {
+    case kTfLiteUInt8:
+      printTypedT<uint8_t>(tensor);
+      break;
+    case kTfLiteInt32:
+      printTypedT<int>(tensor);
+      break;
+    default:
+      break;
+  }
+}
 double get_us(struct timeval t) { return (t.tv_sec * 1000000 + t.tv_usec); }
 
 using TfLiteDelegatePtr = tflite::Interpreter::TfLiteDelegatePtr;
@@ -352,6 +402,10 @@ void RunInference(Settings* s) {
     const float confidence = result.first;
     const int index = result.second;
     LOG(INFO) << confidence << ": " << index << " " << labels[index] << "\n";
+  }
+  std::vector<int> operands_indices = {input, 7, 33, 0, 3, 2, 1, 4, output};
+  for (int tid : operands_indices) {
+    printT(interpreter->tensor(tid));
   }
 }
 
