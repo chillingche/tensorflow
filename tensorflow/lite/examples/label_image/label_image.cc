@@ -47,6 +47,7 @@ limitations under the License.
 #include "tensorflow/lite/tools/command_line_flags.h"
 #include "tensorflow/lite/tools/delegates/delegate_provider.h"
 #include "tensorflow/lite/tools/evaluation/utils.h"
+#include "tensorflow/lite/core/tensor_dumper.h"
 
 #if defined(__ANDROID__)
 #include "tensorflow/lite/delegates/gpu/delegate.h"
@@ -391,6 +392,11 @@ void RunInference(Settings* settings,
   std::vector<std::pair<float, int>> top_results;
 
   int output = interpreter->outputs()[0];
+  // print outputs
+  for (int i = 0; i < interpreter->outputs().size(); ++i) {
+    printT(interpreter->tensor(interpreter->outputs()[i]));
+  }
+
   TfLiteIntArray* output_dims = interpreter->tensor(output)->dims;
   // assume output dims to be something like (1, 1, ... ,size)
   auto output_size = output_dims->data[output_dims->size - 1];

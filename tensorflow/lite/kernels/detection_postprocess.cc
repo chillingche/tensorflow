@@ -15,7 +15,9 @@ limitations under the License.
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/time.h>
 
+#include <iostream>
 #include <algorithm>
 #include <initializer_list>
 #include <numeric>
@@ -29,6 +31,9 @@ limitations under the License.
 #include "tensorflow/lite/kernels/internal/tensor.h"
 #include "tensorflow/lite/kernels/internal/tensor_ctypes.h"
 #include "tensorflow/lite/kernels/kernel_util.h"
+
+#define TIME_INTERVAL_MICRO(START, END) (((END).tv_sec - (START).tv_sec) * 1e6 \
+                                        + ((END).tv_usec - (START).tv_usec))
 
 namespace tflite {
 namespace ops {
@@ -417,8 +422,9 @@ float ComputeIntersectionOverUnion(const TfLiteTensor* decoded_boxes,
 // Complexity is O(N^2) pairwise comparison between boxes
 TfLiteStatus NonMaxSuppressionSingleClassHelper(
     TfLiteContext* context, TfLiteNode* node, OpData* op_data,
-    const std::vector<float>& scores, std::vector<int>* selected,
+    const std::vector<float>& scores, std::vector<int>* selected, int *selected_count,
     int max_detections) {
+  int &num_selected = *selected_count;
   const TfLiteTensor* input_box_encodings;
   TF_LITE_ENSURE_OK(context,
                     GetInputSafe(context, node, kInputTensorBoxEncodings,
@@ -441,21 +447,25 @@ TfLiteStatus NonMaxSuppressionSingleClassHelper(
   TF_LITE_ENSURE(context, ValidateBoxes(decoded_boxes, num_boxes));
 
   // threshold scores
-  std::vector<int> keep_indices;
+  
   // TODO(b/177068807): Remove the dynamic allocation and replace it
   // with temporaries, esp for std::vector<float>
-  std::vector<float> keep_scores;
-  SelectDetectionsAboveScoreThreshold(
-      scores, non_max_suppression_score_threshold, &keep_scores, &keep_indices);
+  const std::vector<float> &keep_scores = scores;
+  std::vector<int> keep_indices;
+  keep_indices.resize(keep_scores.size());
+  std::iota(keep_indices.data(), keep_indices.data() + keep_indices.size(), 0);
+  // SelectDetectionsAboveScoreThreshold(
+  //     scores, non_max_suppression_score_threshold, &keep_scores, &keep_indices);
 
   int num_scores_kept = keep_scores.size();
-  std::vector<int> sorted_indices;
-  sorted_indices.resize(num_scores_kept);
-  DecreasingPartialArgSort(keep_scores.data(), num_scores_kept, num_scores_kept,
-                           sorted_indices.data());
   const int num_boxes_kept = num_scores_kept;
   const int output_size = std::min(num_boxes_kept, max_detections);
-  selected->clear();
+  std::vector<int> sorted_indices;
+  sorted_indices.resize(num_scores_kept);
+  DecreasingPartialArgSort(keep_scores.data(), num_scores_kept, output_size,
+                           sorted_indices.data());
+
+  // selected->clear();
   TfLiteTensor* active_candidate =
       &context->tensors[op_data->active_candidate_index];
   TF_LITE_ENSURE(context, (active_candidate->dims->data[0]) == num_boxes);
@@ -465,16 +475,17 @@ TfLiteStatus NonMaxSuppressionSingleClassHelper(
     active_box_candidate[row] = 1;
   }
 
-  for (int i = 0; i < num_boxes_kept; ++i) {
-    if (num_active_candidate == 0 || selected->size() >= output_size) break;
+  for (int i = 0; i < output_size; ++i) {
+    if (num_active_candidate == 0 || num_selected >= output_size) break;
     if (active_box_candidate[i] == 1) {
-      selected->push_back(keep_indices[sorted_indices[i]]);
+      // selected->push_back(keep_indices[sorted_indices[i]]);
+      selected->at(num_selected++) = keep_indices[sorted_indices[i]];
       active_box_candidate[i] = 0;
       num_active_candidate--;
     } else {
       continue;
     }
-    for (int j = i + 1; j < num_boxes_kept; ++j) {
+    for (int j = i + 1; j < output_size; ++j) {
       if (active_box_candidate[j] == 1) {
         TF_LITE_ENSURE_EQ(context, decoded_boxes->type, kTfLiteFloat32);
         float intersection_over_union = ComputeIntersectionOverUnion(
@@ -562,9 +573,12 @@ TfLiteStatus NonMaxSuppressionMultiClassRegularHelper(TfLiteContext* context,
     }
     // Perform non-maximal suppression on single class
     std::vector<int> selected;
+    selected.resize(num_detections_per_class);
+    int selected_count = 0;
     TF_LITE_ENSURE_STATUS(NonMaxSuppressionSingleClassHelper(
-        context, node, op_data, class_scores, &selected,
+        context, node, op_data, class_scores, &selected, &selected_count,
         num_detections_per_class));
+    selected.resize(selected_count);
     // Add selected indices from non-max suppression of boxes in this class
     int output_index = size_of_sorted_indices;
     for (const auto& selected_index : selected) {
@@ -644,6 +658,9 @@ TfLiteStatus NonMaxSuppressionMultiClassFastHelper(TfLiteContext* context,
                                                    TfLiteNode* node,
                                                    OpData* op_data,
                                                    const float* scores) {
+timeval start, end, t_start, t_end;
+gettimeofday(&start, NULL);
+t_start = start;
   const TfLiteTensor* input_box_encodings;
   TF_LITE_ENSURE_OK(context,
                     GetInputSafe(context, node, kInputTensorBoxEncodings,
@@ -686,18 +703,53 @@ TfLiteStatus NonMaxSuppressionMultiClassFastHelper(TfLiteContext* context,
   max_scores.resize(num_boxes);
   std::vector<int> sorted_class_indices;
   sorted_class_indices.resize(num_boxes * num_classes);
+gettimeofday(&end, NULL);
+{
+  size_t latency = TIME_INTERVAL_MICRO(start, end);
+  start = end;
+  std::cout << "[ " << __func__ << " ] alloc mem    " << latency << " us"
+            << std::endl;
+}
   for (int row = 0; row < num_boxes; row++) {
-    const float* box_scores =
-        scores + row * num_classes_with_background + label_offset;
+    const float* bg_score = scores + row * num_classes_with_background;
+    const float* box_scores = bg_score + label_offset;
     int* class_indices = sorted_class_indices.data() + row * num_classes;
-    DecreasingPartialArgSort(box_scores, num_classes, num_categories_per_anchor,
-                             class_indices);
+    // DecreasingPartialArgSort(box_scores, num_classes, num_categories_per_anchor,
+    //                          class_indices);
+    for (int i = 0; i < num_classes; ++i) {
+      if (class_indices[i])
+        class_indices[0] = i;
+    }
+    // const float *max_score = std::max_element(box_scores, box_scores + num_classes);
+    // class_indices[0] = (max_score - box_scores);
+    // if (row == 1976) {
+    //   for (int i = 0; i < num_classes_with_background; ++i) {
+    //     std::cout << "box_score_" << i << ":  " << bg_score[i] << std::endl;
+    //   }
+    // }
     max_scores[row] = box_scores[class_indices[0]];
   }
+gettimeofday(&end, NULL);
+{
+  size_t latency = TIME_INTERVAL_MICRO(start, end);
+  std::cout << "[ " << __func__ << " ] DecreasingPartialArgSort    " << latency
+            << " us" << std::endl;
+}
   // Perform non-maximal suppression on max scores
   std::vector<int> selected;
+  selected.resize(op_data->max_detections);
+  int selected_count = 0;
+gettimeofday(&start, NULL);
   TF_LITE_ENSURE_STATUS(NonMaxSuppressionSingleClassHelper(
-      context, node, op_data, max_scores, &selected, op_data->max_detections));
+      context, node, op_data, max_scores, &selected, &selected_count, op_data->max_detections));
+  selected.resize(selected_count);
+gettimeofday(&end, NULL);
+{
+  size_t latency = TIME_INTERVAL_MICRO(start, end);
+  start = end;
+  std::cout << "[ " << __func__ << " ] NonMaxSuppressionSingleClassHelper    " << latency
+            << " us" << std::endl;
+}
   // Allocate output tensors
   int output_box_index = 0;
   for (const auto& selected_index : selected) {
@@ -723,6 +775,12 @@ TfLiteStatus NonMaxSuppressionMultiClassFastHelper(TfLiteContext* context,
     }
   }
   GetTensorData<float>(num_detections)[0] = output_box_index;
+gettimeofday(&t_end, NULL);
+{
+  size_t latency = TIME_INTERVAL_MICRO(t_start, t_end);
+  std::cout << "[ " << __func__ << " ]    " << latency << " us" << std::endl
+            << std::endl;
+}
   return kTfLiteOk;
 }
 

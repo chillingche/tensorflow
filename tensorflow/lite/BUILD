@@ -64,6 +64,7 @@ FRAMEWORK_LIB_HDRS = [
     "context_util.h",
     "core/macros.h",
     "core/subgraph.h",
+    "core/tensor_dumper.h",
     "error_reporter.h",
     "graph_info.h",
     "interpreter.h",
